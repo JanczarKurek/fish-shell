@@ -1,9 +1,17 @@
 import json as js
 import argparse as argp
+import re
+
 
 # todo - convertion between config color names and set_color
 def fishify_color(color_string):
+
+    maybe_variable_reference = re.fullmatch(r"var\((.*)\)", color_string)
+    if maybe_variable_reference:
+        return "${}".format(maybe_variable_reference.group(1))
+
     return color_string
+
 
 
 def make_style(foreground, background, font_style):
@@ -25,9 +33,10 @@ class StyleConfig:
         with open(path) as json_file:
             self.config_dict = js.load(json_file)
         # replace list of rules with dict sorted by rule scope, last scope counts
+        # Split rules with multiple scopes
         if "rules" in self.config_dict:
             self.config_dict["rules"] = {
-                rule["scope"]: rule for rule in self.config_dict["rules"]
+                scope: rule for rule in self.config_dict["rules"] for scope in rule["scope"].replace(" ", "").split(",")
             }
 
     def get_by_path(self, path, default=None):
@@ -44,11 +53,16 @@ class StyleConfig:
 
 class FishVariable:
 
-    def __init__(self, variable_name, color_path=(), bg_path=(), style_path=()):
+    def __init__(self, variable_name, color_path=(), bg_path=(), style_path=(), common_path=None):
         self.variable_name = variable_name
-        self.color_path = color_path
-        self.bg_path = bg_path
-        self.style_path = style_path
+        if not common_path:
+            self.color_path = color_path
+            self.bg_path = bg_path
+            self.style_path = style_path
+        else:
+            self.color_path = common_path + ["foreground"]
+            self.bg_path = common_path + ["background"]
+            self.style_path = common_path + ["font_style"]
 
     def build_from_config(self, config_dict, flag="-g"):
         style = make_style(
@@ -63,29 +77,61 @@ class FishVariable:
         ) if style else None
 
 
+def parse_local_variables(style_config):
+    return [
+        'set -l {} "{}"'.format(var_name, var_value)
+        for var_name, var_value in style_config.get_by_path(["variables"]).items()
+    ]
+
+
 variables = [
     FishVariable(
         "fish_color_normal",
-        color_path=["globals", "foreground"],
-        bg_path=["globals", "background"],
-        style_path=["globals", "font_style"]
+        common_path=["globals"]
     ),
     FishVariable(
         "fish_color_command",
-        color_path=["rules", "command", "foreground"],
-        bg_path=["rules", "command", "background"],
-        style_path=["rules", "command", "font_style"]
+        common_path=["rules", "command"]
     ),
     FishVariable(
         "fish_color_selection",
         color_path=["globals", "selection_foreground"],
         bg_path=["globals", "selection"]
+    ),
+    FishVariable(
+        "fish_color_comment",
+        common_path=["rules", "comment"]
+    ),
+    FishVariable(
+        "fish_color_operator",
+        common_path=["rules", "keyword.operator"]
+    ),
+    FishVariable(
+        "fish_color_quote",
+        common_path=["rules", "string"]
+    ),
+    FishVariable(
+        "fish_color_escape",
+        common_path=["rules", "constant.character"]
+    ),
+    FishVariable(
+        "fish_color_end",
+        common_path=["rules", "punctuation.separator"]
+    ),
+    FishVariable(
+        "fish_color_error",
+        common_path=["rules", "message.error"]
     )
 ]
 
 
 def main(args):
     config_dict = StyleConfig(args.theme_path)
+
+    for local_variable_definition in parse_local_variables(config_dict):
+        print(local_variable_definition)
+
+    print()
 
     for var in variables:
         str_var = var.build_from_config(config_dict, flag="-U" if args.universal else "-g")
